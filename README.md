@@ -1,9 +1,9 @@
 [![ORCID: Monks](https://img.shields.io/badge/Tom_Monks_ORCID-0000--0003--2631--4481-brightgreen)](https://orcid.org/0000-0003-2631-4481)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-# DES modeller agent
+# JSON to Ciw (`json2ciw`)
 
-🎓 A simple agent that converts images of patient pathways into runnable computer simulation models.
+🎓 A simple tool that can convert JSON file to a functional Ciw simulation model.
 
 ## License
 
@@ -17,7 +17,7 @@ If you reuse any of the code, or the tutorial helps you work, please provide a c
 @software{des_modeller,
 author = {Monks, Thomas},
 license = {MIT},
-title = {{DES Modeller Agent}},
+title = {{json2ciw}},
 url = {https://github.com/pythonhealthdatascience/des-modeller-agent}
 }
 ```
@@ -39,7 +39,7 @@ mamba env create -f binder/environment.yml
 Activate the mamba environment using the following command:
 
 ```bash
-mamba activate des_mod_agent
+mamba activate json2ciw
 ```
 
 Run Jupyter-lab
