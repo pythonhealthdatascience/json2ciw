@@ -13,5 +13,8 @@ Consistent identifier (represents all versions, resolves to latest):
 
 ### Added
 
-* TBD
+* `json2ciw` installable Python package
+* `datasets` module for importing JSON files (no validation)
+* `engine` module for converting a valid JSON file into a ciw model. Function 
+* `tests`: testing data loading. 
 
