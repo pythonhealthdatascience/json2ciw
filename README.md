@@ -14,7 +14,7 @@ The materials have been made available under an [MIT license](LICENCE).  The mat
 If you reuse any of the code, or the tutorial helps you work, please provide a citation.
 
 ```bibtex
-@software{des_modeller,
+@software{json2ciw_repo,
 author = {Monks, Thomas},
 license = {MIT},
 title = {{json2ciw}},
