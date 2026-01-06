@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "json2ciw"
+dynamic = ["version"]
+description = "A python package to convert JSON file to working Ciw DES models"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Thomas Monks", email = "t.m.w.monks@exeter.ac.uk" },
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11", 
+    "Programming Language :: Python :: 3.12",
+
+]
+dependencies = [
+    "numpy>=1.26.1", 
+    "pandas>=2.0.1",
+    "ciw>=3.2.7"
+]
+
+[project.urls]
+Homepage = "https://github.com/pythonhealthdatascience/json2ciw"
+"Bug Tracker" = "https://github.com/pythonhealthdatascience/json2ciw/issues"
+
+[tool.hatch.version]
+path = "json2ciw/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/json2ciw",
+]
