@@ -2,12 +2,17 @@ name: json2ciw
 channels:
   - conda-forge
 dependencies:
+  - black
+  - flake8
+  - hatch
   - jupyterlab=4.5.1
   - jupyterlab-spellchecker=0.8.4
   - matplotlib=3.10.8
+  - nbqa
   - numpy=2.4.0
   - pandas=2.3.3
   - pip=25.3
+  - pytest=9.0.2
   - python=3.12
   - pip:
     - ciw==3.2.7
