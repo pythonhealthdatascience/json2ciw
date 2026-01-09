@@ -1,28 +1,29 @@
-# schema.py
-from typing import List, Literal, Dict
+from typing import List, Literal, Dict, Optional
 from pydantic import BaseModel, Field
 
 class Distribution(BaseModel):
-    name: Literal["exponential", "triangular", "uniform", "deterministic"]
+    type: Literal["exponential", "triangular", "uniform", "deterministic"]
     parameters: Dict[str, float]
 
 class Resource(BaseModel):
     name: str
-    count: int = Field(..., gt=0)
+    capacity: int = Field(..., gt=0)
 
 class Activity(BaseModel):
     name: str
-    distribution: Distribution
+    type: str
     resource: Resource
+    service_distribution: Distribution
+    # Optional because not all nodes have arrivals
+    arrival_distribution: Optional[Distribution] = None
 
 class Transition(BaseModel):
-    from_node: str = Field(..., alias="from")
-    to_node: str = Field(..., alias="to")
+    source: str = Field(..., alias="from")
+    target: str = Field(..., alias="to")
     probability: float = Field(..., ge=0.0, le=1.0)
 
 class ProcessModel(BaseModel):
-    """The Full Queuing Network Description"""
     name: str
-    inter_arrival_time: Distribution
+    description: Optional[str] = None
     activities: List[Activity]
     transitions: List[Transition]
