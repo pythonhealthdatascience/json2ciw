@@ -1,3 +1,13 @@
+"""
+Pydantic schema definitions for validating and visualizing queuing network models.
+
+This module provides data structures to represent discrete event simulation models
+compatible with the Ciw library. It includes validation logic for network topology
+and transition probabilities, as well as functionality to generate Mermaid
+flowcharts for visual verification of the model structure.
+"""
+
+
 from typing import List, Literal, Dict, Optional, Set
 from pydantic import BaseModel, Field, model_validator
 from collections import defaultdict
