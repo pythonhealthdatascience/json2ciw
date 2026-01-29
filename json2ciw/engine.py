@@ -1,137 +1,212 @@
 import ciw
 from typing import Dict, Any, List, Optional
+from .schema import ProcessModel
+import statistics
+import pandas as pd
 
-def create_ciw_network(json_data: Dict[str, Any]) -> ciw.network.Network:
+class CiwConverter:
+    def __init__(self, model):
+        self.model = model
+
+    def generate_params(self) -> dict:
+        """
+        Converts the agnostic ProcessModel into a dictionary of parameters 
+        compatible with ciw.create_network(**params).
+        """
+        
+        # 1. Map Activity Names to Integer Indices
+        # Ciw networks are index-based (0, 1, 2...), but our JSON is name-based.
+        # We assume the order in the list is the order of the nodes.
+        node_map = {act.name: i for i, act in enumerate(self.model.activities)}
+        n_nodes = len(self.model.activities)
+
+        # 2. Initialize Lists for Ciw Arguments
+        number_of_servers = []
+        service_distributions = []
+        arrival_distributions = []
+
+        # 3. Iterate through Activities to build Node properties
+        for act in self.model.activities:
+            # -- Resources (Servers) --
+            number_of_servers.append(act.resource.capacity)
+
+            # -- Service Distribution (Mandatory) --
+            service_distributions.append(self._make_ciw_dist(act.service_distribution))
+
+            # -- Arrival Distribution (Optional) --
+            if act.arrival_distribution:
+                arrival_distributions.append(self._make_ciw_dist(act.arrival_distribution))
+            else:
+                # If no arrival distribution is specified in JSON, it means no external arrivals
+                # None = old NoArrivals pre ciw v3
+                arrival_distributions.append(None)
+
+        # 4. Build Routing Matrix (Process Flow -> Probability Matrix)
+        # Initialize an N x N matrix with 0.0
+        routing = [[0.0] * n_nodes for _ in range(n_nodes)]
+        
+        for t in self.model.transitions:
+            # We only care about transitions between internal nodes.
+            # Transitions to "Exit" are implicit in Ciw (1.0 - sum(row)).
+            if t.target != "Exit":
+                # Validate that nodes exist (Pydantic validates types, but not logic across lists)
+                if t.source not in node_map or t.target not in node_map:
+                    raise ValueError(f"Transition references unknown node: {t.source} -> {t.target}")
+                
+                u_idx = node_map[t.source]
+                v_idx = node_map[t.target]
+                routing[u_idx][v_idx] = t.probability
+
+        # 5. Return the Dictionary
+        return {
+            "number_of_servers": number_of_servers,
+            "arrival_distributions": arrival_distributions,
+            "service_distributions": service_distributions,
+            "routing": routing
+        }
+
+    def _make_ciw_dist(self, dist_obj):
+        """Helper to convert Pydantic Distribution model to Ciw Object"""
+        p = dist_obj.parameters
+        
+        if dist_obj.type == "exponential":
+            return ciw.dists.Exponential(1/p["rate"])
+        elif dist_obj.type == "triangular":
+            return ciw.dists.Triangular(p["min"], p["mode"], p["max"])
+        elif dist_obj.type == "uniform":
+            return ciw.dists.Uniform(p["min"], p["max"])
+        elif dist_obj.type == "deterministic":
+             return ciw.dists.Deterministic(p["value"])
+        # TO DO: Add more mappings as needed (Lognormal, Gamma, etc.)
+        else:
+             raise ValueError(f"Unsupported distribution type for Ciw: {dist_obj.type}")
+
+def multiple_replications(
+    network: ciw.Network,
+    process_model: "ProcessModel",
+    num_reps: int = 50,
+    runtime: float = 1000.0,
+    warmup: float = 0.0
+) -> pd.DataFrame:
     """
-    Parses a JSON dictionary describing a discrete event simulation (DES) process 
-    and generates a corresponding Ciw Network object.
+    Run multiple replications of a Ciw simulation and collect performance metrics.
 
-    This function maps activity definitions, resource constraints, and routing 
-    logic from a simplified JSON schema to Ciw's internal configuration format.
+    Executes independent replications of a discrete event simulation, collecting
+    per-node performance measures including arrivals, waiting times, service times,
+    utilisation, and queue lengths. Activity and resource names from the process
+    model are included in the output.
 
     Parameters
     ----------
-    json_data : Dict[str, Any]
-        A dictionary containing the simulation process definition. It is expected 
-        to follow a specific schema with keys: 'process', which contains 
-        'activities', 'transitions', and 'inter_arrival_time'.
+    network : ciw.Network
+        A configured Ciw network object defining the queueing system structure,
+        service distributions, and routing.
+    process_model : ProcessModel
+        Pydantic model containing activity and resource metadata. Used to map
+        node IDs to human-readable activity and resource names.
+    num_reps : int, default 50
+        Number of independent replications to run. Each replication uses a
+        the replication number as a random seed.
+    runtime : float, default 1000.0
+        Simulation time horizon for each replication. Units match the time
+        units used in service and arrival distributions.
+    warmup : float, default 0.0
+        Warmup period to exclude from statistics. Records with arrival times
+        before this value are filtered out to reduce initialization bias.
 
     Returns
     -------
-    ciw.network.Network
-        An initialized Ciw Network object ready for simulation.
+    pd.DataFrame
+        DataFrame with one row per node per replication containing:
+        
+        - rep : int
+            Replication number (0-indexed)
+        - node_id : int
+            Ciw node identifier (1-indexed)
+        - activity_name : str
+            Name of the activity from process model
+        - resource_name : str
+            Name of the resource from process model
+        - resource_capacity : int
+            Number of servers at this node
+        - arrivals : int
+            Number of completed visits to this node
+        - mean_wait : float
+            Mean waiting time (queueing time before service)
+        - mean_service : float
+            Mean service time
+        - utilisation : float
+            Time-averaged server utilisation (fraction busy)
+        - mean_Lq : float
+            Time-averaged mean number of customers in queue
 
-    Notes
-    -----
-    - **Arrivals**: Assumed to occur only at the first activity listed in the 
-      'activities' list.
-    - **Resources**: Capacity is determined by the 'number' attribute in the 
-      resource definition. Defaults to 1 if 'number' is missing. Infinite 
-      capacity is supported via 'type': 'infinite'.
-    - **Exits**: Routing probabilities that sum to less than 1.0 imply a 
-      probability of exiting the system. Explicit transitions to "Exit" are 
-      handled by omitting them from the routing matrix.
+    Examples
+    --------
+    >>> process_model = ProcessModel.model_validate(json_data)
+    >>> network = build_ciw_network(process_model)
+    >>> df_raw = run_replications_general(
+    ...     network, 
+    ...     process_model, 
+    ...     num_reps=100, 
+    ...     runtime=1000
+    ... )
+    >>> summary = summarise_results(df_raw)
     """
-    
-    process = json_data.get('process', {})
-    activities = process.get('activities', [])
-    transitions = process.get('transitions', [])
-    arrival_config = process.get('inter_arrival_time', {})
+    # Build a mapping from node_id (1-indexed) to activity/resource info
+    node_metadata = {}
+    for idx, activity in enumerate(process_model.activities):
+        node_id = idx + 1  # Ciw uses 1-based indexing
+        node_metadata[node_id] = {
+            "activity_name": activity.name,
+            "resource_name": activity.resource.name,
+            "resource_capacity": activity.resource.capacity,
+        }
 
-    # 1. Map Activity Names to Node Indices (0, 1, 2...)
-    # Ciw nodes are 1-indexed in the library's internal logic, but lists are 0-indexed.
-    name_to_index = {act['name']: i for i, act in enumerate(activities)}
-    num_nodes = len(activities)
+    records = []
 
-    # 2. Initialize Ciw Configuration Lists
-    arrival_distributions = [None] * num_nodes
-    service_distributions = [None] * num_nodes
-    number_of_servers = [1] * num_nodes  # Default capacity 1
-    routing = [[0.0] * num_nodes for _ in range(num_nodes)]
+    for rep in range(num_reps):
+        ciw.seed(rep)
+        Q = ciw.Simulation(network)
+        Q.simulate_until_max_time(runtime)
 
-    # 3. Configure Arrivals
-    # Assumption: Arrivals enter the system at the first activity defined
-    # Ciw uses 'None' or 'ciw.dists.NoArrivals()' for nodes with no external arrivals.
-    entry_node_idx = 0
-    arr_dist = arrival_config.get('distribution')
-    arr_params = arrival_config.get('parameters', {})
+        recs = Q.get_all_records()
+        
+        # Optional warmup filter
+        if warmup > 0:
+            recs = [r for r in recs if r.arrival_date >= warmup]
 
-    if arr_dist == 'exponential':
-        # ciw.dists.Exponential takes 1 / 'rate'
-        # Note THIS NEEDS TO BE MAMAGED IN SOME WAY AS THE AUTHORS COULD SPECIFY rate or inter-arrival time.
-        arrival_distributions[entry_node_idx] = ciw.dists.Exponential(rate=1/arr_params['rate'])
-    else:
-        # Placeholder for other arrival distributions if needed
-        arrival_distributions[entry_node_idx] = ciw.dists.Deterministic(0)
+        # Loop over transitive nodes (service centres)
+        for node in Q.transitive_nodes:
+            node_id = node.id_number
+            meta = node_metadata.get(node_id, {})
 
-    # 4. Configure Service Distributions and Servers
-    for i, activity in enumerate(activities):
-        # -- Service Distribution --
-        dist_type = activity.get('distribution')
-        params = activity.get('parameters', {})
+            node_recs = [r for r in recs if r.node == node_id]
+            waits = [r.waiting_time for r in node_recs]
+            services = [r.service_time for r in node_recs]
 
-        if dist_type == 'exponential':
-            # JSON params might use 'rate' or 'mean'. Ciw Exponential uses rate (lambda)
-            # If JSON provides mean, rate = 1.0 / mean. Assuming JSON matches Ciw 'rate' here.
-            rate = params.get('rate', 1.0)
-            service_distributions[i] = ciw.dists.Exponential(rate=rate)
+            arrivals = len(node_recs)
+            mean_wait = statistics.mean(waits) if waits else 0.0
+            mean_service = statistics.mean(services) if services else 0.0
 
-        elif dist_type == 'triangular':
-            # Ciw (via Python random) typically uses (low, high, mode)
-            # JSON provides {min, mode, max}
-            service_distributions[i] = ciw.dists.Triangular(
-                lower=params['min'],
-                upper=params['max'],
-                mode=params['mode']
-            )
+            # Ciw server_utilisation gives time-averaged busy fraction
+            util = node.server_utilisation
 
+            # Time-weighted mean number in queue (Lq)
+            horizon = runtime - warmup
+            total_wait = sum(waits)
+            mean_Lq = total_wait / horizon if horizon > 0 else 0.0
 
-        elif dist_type == 'uniform':
-            service_distributions[i] = ciw.dists.Uniform(
-                lower=params['min'],
-                upper=params['max']
-            )
+            records.append({
+                "rep": rep,
+                "node_id": node_id,
+                "activity_name": meta.get("activity_name", f"Node {node_id}"),
+                "resource_name": meta.get("resource_name", "Unknown"),
+                "resource_capacity": meta.get("resource_capacity", 0),
+                "arrivals": arrivals,
+                "mean_wait": mean_wait,
+                "mean_service": mean_service,
+                "utilisation": util * 100,
+                "mean_Lq": mean_Lq,
+            })
 
-
-        elif dist_type == 'deterministic':
-            service_distributions[i] = ciw.dists.Deterministic(value=params['value'])
-
-        # -- Servers / Resources --
-        # The JSON example lacks a 'capacity' field for resources.
-        # We check for it, otherwise default to 1.
-        resource = activity.get('resource', {})
-        capacity = resource.get('number', 1)
-        # If resource type is 'infinite', set servers to float('inf')
-        if resource.get('type') == 'infinite':
-            capacity = float('inf')
-
-        number_of_servers[i] = capacity
-
-    # 5. Configure Routing Matrix
-    for trans in transitions:
-        from_node = trans.get('from')
-        to_node = trans.get('to')
-        prob = trans.get('probability', 0.0)
-
-        if from_node in name_to_index:
-            row_idx = name_to_index[from_node]
-
-            # If destination is another node, fill the matrix
-            if to_node in name_to_index:
-                col_idx = name_to_index[to_node]
-                routing[row_idx][col_idx] = prob
-
-            # If destination is "Exit", we do nothing.
-            # In Ciw, if row sum < 1.0, the remainder is the probability of exiting.
-            elif to_node == "Exit":
-                pass
-
-    # 6. Create Network
-    model = ciw.create_network(
-        arrival_distributions=arrival_distributions,
-        service_distributions=service_distributions,
-        number_of_servers=number_of_servers,
-        routing=routing
-    )
-
-    return model
+    return pd.DataFrame.from_records(records)
